@@ -1,0 +1,92 @@
+name: Docker Build
+
+on:
+  workflow_call:
+    outputs:
+      tags:
+        description: "Docker tags built"
+        value: ${{ jobs.build.outputs.tags }}
+    inputs:
+      skip:
+        required: false
+        type: boolean
+        default: false
+      username:
+        required: true
+        type: string
+      registry:
+        required: true
+        type: string
+      image:
+        required: true
+        type: string
+      context:
+        required: false
+        type: string
+        default: "."
+      target:
+        required: false
+        type: string
+      build-args:
+        required: false
+        type: string
+    secrets:
+      token:
+        required: true
+
+jobs:
+  build:
+    if: ${{ ! inputs.skip }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: ${{ github.workflow }}-${{ inputs.image}}-${{ github.ref }}
+      cancel-in-progress: true
+    outputs:
+      tags: ${{ steps.docker_metadata.outputs.tags }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: docker - login
+        id: docker_login
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ inputs.username }}
+          password: ${{ secrets.token }}
+
+      - name: docker - extract metadata
+        id: docker_metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.registry }}/${{ inputs.image }}
+          flavor: |
+            latest=false
+          tags: |
+            type=sha,enable=true,priority=100,prefix=,suffix=,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and cache
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context }}
+          push: true
+          tags: ${{ steps.docker_metadata.outputs.tags }}
+          labels: ${{ steps.docker_metadata.outputs.labels }}
+          target: ${{ inputs.target }}
+          build-args: |
+            BUILD_TIME=${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.created'] }}
+            BUILD_VERSION=${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.version'] }}
+            BUILD_REVISION=${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.revision'] }}
+            ${{ inputs.build-args }}
+          cache-from: type=registry,ref=${{ inputs.registry}}/${{ inputs.image }}:${{ github.default_branch }}
+          cache-to: type=inline
