@@ -1,0 +1,96 @@
+name: "Azure Web App Deployment"
+
+on:
+  workflow_call:
+    outputs:
+      tags:
+        description: "Docker tags selected for build"
+        value: ${{ jobs.build.outputs.tags }}
+    inputs:
+      skip:
+        required: false
+        type: boolean
+        default: false
+      environment:
+        required: false
+        type: string
+      images:
+        description: "Docker image selected for webapp deployment."
+        required: true
+        type: string
+    secrets:
+      AZURE_CREDENTIALS:
+        required: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    outputs:
+      deploy_cfg_apps: ${{ steps.config.outputs.deploy_cfg_apps }}
+    steps:
+      - id: config
+        name: Load Config
+        run: |
+          echo "deploy_cfg_apps=${{ toJSON(vars.DEPLOY_CFG_APPS) }}" >> $GITHUB_OUTPUT
+
+  deploy:
+    needs: [preflight]
+    permissions:
+      contents: none
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.webapps-deploy.outputs.webapp-url }}
+    strategy:
+      # When set to true, GitHub cancels all in-progress jobs if any matrix job fails.
+      fail-fast: true
+      # The maximum number of jobs that can run simultaneously.
+      max-parallel: 1
+      matrix:
+        apps: ${{ fromJSON(needs.preflight.outputs.deploy_cfg_apps) }}
+    steps:
+      - name: Login via Azure CLI
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Start Slot
+        if: ${{ matrix.apps.slot-name }}
+        run: az webapp start -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
+
+      - name: Deploy Web App
+        id: webapps-deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ matrix.apps.app-name }}
+          images: ${{ inputs.images }}
+          slot-name: ${{ matrix.apps.slot-name || 'production' }}
+
+      # Give time for the deployment to process.
+      - id: delay
+        shell: bash
+        run: sleep 90s
+
+      # Http healthcheck, inspired by
+      # https://github.com/Azure/webapps-deploy/issues/341#issuecomment-1562578388
+      - id: healthcheck
+        uses: jtalk/url-health-check-action@v4
+        with:
+          # Check the following URLs one by one sequentially
+          url: ${{ steps.webapps-deploy.outputs.webapp-url }}/up
+          # Follow redirects, or just report success on 3xx status codes
+          follow-redirect: true # Optional, defaults to "false"
+          # Fail this action after this many failed attempts
+          max-attempts: 18 # Optional, defaults to 1
+          # Delay between retries
+          retry-delay: 5s # Optional, only applicable to max-attempts > 1
+          # Retry all errors, including 404. This option might trigger curl upgrade.
+          retry-all: true # Optional, defaults to "false"
+
+      - name: Swap slots
+        if: ${{ matrix.apps.slot-name }}
+        run: |
+          az webapp deployment slot swap -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
+          az webapp stop -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
