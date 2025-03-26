@@ -4,7 +4,7 @@ on:
   workflow_call:
     outputs:
       tags:
-        description: "Docker tags built"
+        description: "Docker tags selected for build"
         value: ${{ jobs.build.outputs.tags }}
     inputs:
       skip:
@@ -76,7 +76,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and cache
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.context }}
           push: true
