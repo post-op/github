@@ -28,12 +28,13 @@ jobs:
     environment:
       name: ${{ inputs.environment }}
     outputs:
-      deploy_cfg_apps: ${{ steps.config.outputs.deploy_cfg_apps }}
+      deploy_cfg_apps: ${{ steps.config.outputs.json }}
     steps:
-      - id: config
-        name: Load Config
-        run: |
-          echo "deploy_cfg_apps=${{ toJSON(vars.DEPLOY_CFG_APPS) }}" >> $GITHUB_OUTPUT
+      - name: Load Config
+        id: config
+        uses: nickofthyme/object-remap@v3
+        with:
+          apps: ${{ vars.DEPLOY_CFG_APPS }}
 
   deploy:
     needs: [preflight]
@@ -48,8 +49,7 @@ jobs:
       fail-fast: true
       # The maximum number of jobs that can run simultaneously.
       max-parallel: 1
-      matrix:
-        apps: ${{ fromJSON(needs.preflight.outputs.deploy_cfg_apps) }}
+      matrix: ${{ fromJSON(needs.preflight.outputs.deploy_cfg_apps) }}
     steps:
       - name: Login via Azure CLI
         uses: azure/login@v2
