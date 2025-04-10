@@ -30,6 +30,13 @@ on:
       build-args:
         required: false
         type: string
+      cache-from:
+        required: false
+        type: string
+      cache-to:
+        required: false
+        type: string
+        default: type=inline
     secrets:
       token:
         required: true
@@ -88,5 +95,5 @@ jobs:
             BUILD_VERSION=${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.version'] }}
             BUILD_REVISION=${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.revision'] }}
             ${{ inputs.build-args }}
-          cache-from: type=registry,ref=${{ inputs.registry}}/${{ inputs.image }}:${{ github.default_branch }}
-          cache-to: type=inline
+          cache-from: ${{ inputs.cache-from }}
+          cache-to: ${{ inputs.cache-from }}
