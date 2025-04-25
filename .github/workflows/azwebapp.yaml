@@ -3,9 +3,9 @@ name: "Azure Web App Deployment"
 on:
   workflow_call:
     outputs:
-      tags:
-        description: "Docker tags selected for build"
-        value: ${{ jobs.build.outputs.tags }}
+      webapp-url:
+        description: "Azure Web App URL"
+        value: ${{ jobs.deploy.outputs.webapp-url }}
     inputs:
       skip:
         required: false
@@ -18,6 +18,16 @@ on:
         description: "Docker image selected for webapp deployment."
         required: true
         type: string
+      healthcheck_path:
+        description: "Healthcheck URL for webapp deployment."
+        type: string
+        required: false
+        default: "/up"
+      healthcheck_delay:
+        description: "Sleep time args for delay before healthcheck"
+        type: string
+        required: false
+        default: 30s
     secrets:
       AZURE_CREDENTIALS:
         required: true
@@ -44,6 +54,8 @@ jobs:
     environment:
       name: ${{ inputs.environment }}
       url: ${{ steps.webapps-deploy.outputs.webapp-url }}
+    outputs:
+      webapp-url: ${{ steps.webapps-deploy.outputs.webapp-url }}
     strategy:
       # When set to true, GitHub cancels all in-progress jobs if any matrix job fails.
       fail-fast: true
@@ -68,24 +80,25 @@ jobs:
           images: ${{ inputs.images }}
           slot-name: ${{ matrix.apps.slot-name || 'production' }}
 
-      # Give time for the deployment to process.
+      # This is needed to ensure that we are not checking the old deployment.
       - id: delay
         shell: bash
-        run: sleep 90s
+        run: sleep ${{ inputs.healthcheck_delay }}
 
       # Http healthcheck, inspired by
       # https://github.com/Azure/webapps-deploy/issues/341#issuecomment-1562578388
+      # Azure gateway timeout is 4 minutes. Limit max attempts to avoid lengthy checks
       - id: healthcheck
         uses: jtalk/url-health-check-action@v4
         with:
           # Check the following URLs one by one sequentially
-          url: ${{ steps.webapps-deploy.outputs.webapp-url }}/up
+          url: ${{ steps.webapps-deploy.outputs.webapp-url }}${{ inputs.healthcheck_path }}
           # Follow redirects, or just report success on 3xx status codes
           follow-redirect: true # Optional, defaults to "false"
           # Fail this action after this many failed attempts
-          max-attempts: 18 # Optional, defaults to 1
+          max-attempts: 3
           # Delay between retries
-          retry-delay: 5s # Optional, only applicable to max-attempts > 1
+          retry-delay: 30s # Optional, only applicable to max-attempts > 1
           # Retry all errors, including 404. This option might trigger curl upgrade.
           retry-all: true # Optional, defaults to "false"
 
