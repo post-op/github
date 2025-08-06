@@ -1,0 +1,116 @@
+name: "Azure Web App Deployment"
+
+on:
+  workflow_call:
+    outputs:
+      webapp-url:
+        description: "Azure Web App URL"
+        value: ${{ jobs.deploy.outputs.webapp-url }}
+    inputs:
+      skip:
+        required: false
+        type: boolean
+        default: false
+      environment:
+        required: false
+        type: string
+      images:
+        description: "Docker image selected for webapp deployment."
+        required: true
+        type: string
+      healthcheck_path:
+        description: "Healthcheck URL for webapp deployment."
+        type: string
+        required: false
+        default: "/up"
+      healthcheck_delay:
+        description: "Sleep time args for delay before healthcheck"
+        type: string
+        required: false
+        default: 30s
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+    outputs:
+      deploy_cfg_apps: ${{ steps.config.outputs.json }}
+    steps:
+      - name: Load Config
+        id: config
+        uses: nickofthyme/object-remap@v3
+        with:
+          apps: ${{ vars.DEPLOY_CFG_APPS }}
+
+  deploy:
+    needs: [preflight]
+    permissions:
+      id-token: write
+      contents: none
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.webapps-deploy.outputs.webapp-url }}
+    outputs:
+      webapp-url: ${{ steps.webapps-deploy.outputs.webapp-url }}
+    strategy:
+      # When set to true, GitHub cancels all in-progress jobs if any matrix job fails.
+      fail-fast: true
+      # The maximum number of jobs that can run simultaneously.
+      max-parallel: 1
+      matrix: ${{ fromJSON(needs.preflight.outputs.deploy_cfg_apps) }}
+    steps:
+      - name: Login via Azure CLI
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Start Slot
+        if: ${{ matrix.apps.slot-name }}
+        run: az webapp start -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
+
+      - name: Deploy Web App
+        id: webapps-deploy
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ matrix.apps.app-name }}
+          images: ${{ inputs.images }}
+          slot-name: ${{ matrix.apps.slot-name || 'production' }}
+
+      # This is needed to ensure that we are not checking the old deployment.
+      - id: delay
+        shell: bash
+        run: sleep ${{ inputs.healthcheck_delay }}
+
+      # Http healthcheck, inspired by
+      # https://github.com/Azure/webapps-deploy/issues/341#issuecomment-1562578388
+      # Azure gateway timeout is 4 minutes. Limit max attempts to avoid lengthy checks
+      - id: healthcheck
+        uses: jtalk/url-health-check-action@v4
+        with:
+          # Check the following URLs one by one sequentially
+          url: ${{ steps.webapps-deploy.outputs.webapp-url }}${{ inputs.healthcheck_path }}
+          # Follow redirects, or just report success on 3xx status codes
+          follow-redirect: true # Optional, defaults to "false"
+          # Fail this action after this many failed attempts
+          max-attempts: 3
+          # Delay between retries
+          retry-delay: 30s # Optional, only applicable to max-attempts > 1
+          # Retry all errors, including 404. This option might trigger curl upgrade.
+          retry-all: true # Optional, defaults to "false"
+
+      - name: Swap slots
+        if: ${{ matrix.apps.slot-name }}
+        run: |
+          az webapp deployment slot swap -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
+          az webapp stop -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
