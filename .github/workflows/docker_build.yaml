@@ -59,7 +59,7 @@ jobs:
       metadata: ${{ steps.docker_metadata.outputs.json }}
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: docker - login
         id: docker_login
