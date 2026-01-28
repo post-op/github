@@ -81,6 +81,7 @@ jobs:
             type=ref,event=branch
             type=ref,event=tag
             type=ref,event=pr
+            type=raw,value=stable,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
 
       - name: Set up Docker Buildx
         id: buildx
