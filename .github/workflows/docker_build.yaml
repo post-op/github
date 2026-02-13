@@ -101,4 +101,4 @@ jobs:
             BUILD_REVISION=${{ fromJSON(steps.docker_metadata.outputs.json).labels['org.opencontainers.image.revision'] }}
             ${{ inputs.build-args }}
           cache-from: ${{ inputs.cache-from }}
-          cache-to: ${{ inputs.cache-from }}
+          cache-to: ${{ inputs.cache-to }}
