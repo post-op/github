@@ -23,11 +23,6 @@ on:
         type: string
         required: false
         default: "/up"
-      healthcheck_delay:
-        description: "Sleep time args for delay before healthcheck"
-        type: string
-        required: false
-        default: 30s
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -38,6 +33,7 @@ on:
 
 jobs:
   preflight:
+    if: ${{ ! inputs.skip }}
     runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.environment }}
@@ -46,7 +42,7 @@ jobs:
     steps:
       - name: Load Config
         id: config
-        uses: nickofthyme/object-remap@v3
+        uses: nickofthyme/object-remap@27fddfcb88c02a87ae52e0ddcca703961464f2fc # v3
         with:
           apps: ${{ vars.DEPLOY_CFG_APPS }}
 
@@ -69,7 +65,8 @@ jobs:
       matrix: ${{ fromJSON(needs.preflight.outputs.deploy_cfg_apps) }}
     steps:
       - name: Login via Azure CLI
-        uses: azure/login@v2
+        id: login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -81,36 +78,87 @@ jobs:
 
       - name: Deploy Web App
         id: webapps-deploy
-        uses: azure/webapps-deploy@v3
+        uses: azure/webapps-deploy@84a80cfe7e9889f35148ed88c307e6e93bf02578 # v3
         with:
           app-name: ${{ matrix.apps.app-name }}
           images: ${{ inputs.images }}
           slot-name: ${{ matrix.apps.slot-name || 'production' }}
 
-      # This is needed to ensure that we are not checking the old deployment.
-      - id: delay
+      # Poll deployment status until complete or timeout (5 min).
+      # Kudu API status codes: 4 = success. The `complete` boolean is the primary signal.
+      - name: Poll Deployment Status
+        id: poll-deployment
         shell: bash
-        run: sleep ${{ inputs.healthcheck_delay }}
+        env:
+          APP_NAME: ${{ matrix.apps.app-name }}
+          RESOURCE_GROUP: ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
+          SLOT_NAME: ${{ matrix.apps.slot-name }}
+        run: |
+          SLOT_ARGS=(-n "$APP_NAME" -g "$RESOURCE_GROUP")
+          if [ -n "$SLOT_NAME" ]; then
+            SLOT_ARGS+=(-s "$SLOT_NAME")
+          fi
 
-      # Http healthcheck, inspired by
+          MAX_ATTEMPTS=20
+          INTERVAL=15
+
+          # Short delay to ensure deployment has been registered.
+          # Known limitation: if another deployment is triggered between webapps-deploy
+          # and this sleep, [0].id may refer to that deployment instead. Accepted risk
+          # given single-concurrency (max-parallel: 1) and internal deployment pipelines.
+          sleep 10
+
+          DEPLOYMENT_ID=$(az webapp log deployment list "${SLOT_ARGS[@]}" --query "[0].id" -o tsv)
+          if [ -z "$DEPLOYMENT_ID" ]; then
+            echo "Failed to retrieve deployment ID"
+            exit 1
+          fi
+          echo "Tracking deployment: $DEPLOYMENT_ID"
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            RESULT=$(az webapp log deployment list "${SLOT_ARGS[@]}" --query "[?id=='$DEPLOYMENT_ID'] | [0].{complete: complete, status: status}" -o json)
+            COMPLETE=$(echo "$RESULT" | jq -r '.complete')
+            STATUS=$(echo "$RESULT" | jq -r '.status')
+
+            echo "Attempt $i/$MAX_ATTEMPTS: complete=$COMPLETE status=$STATUS"
+
+            if [ "$COMPLETE" = "true" ]; then
+              if [ "$STATUS" = "4" ]; then
+                echo "Deployment succeeded."
+                exit 0
+              else
+                echo "Deployment failed with status: $STATUS"
+                az webapp log deployment show "${SLOT_ARGS[@]}" --deployment-id "$DEPLOYMENT_ID"
+                exit 1
+              fi
+            fi
+
+            if [ "$i" -lt "$MAX_ATTEMPTS" ]; then
+              sleep $INTERVAL
+            fi
+          done
+
+          echo "Deployment polling timed out after $((MAX_ATTEMPTS * INTERVAL))s"
+          az webapp log deployment show "${SLOT_ARGS[@]}" --deployment-id "$DEPLOYMENT_ID"
+          exit 1
+
+      # HTTP healthcheck after deployment is confirmed running
       # https://github.com/Azure/webapps-deploy/issues/341#issuecomment-1562578388
-      # Azure gateway timeout is 4 minutes. Limit max attempts to avoid lengthy checks
       - id: healthcheck
-        uses: jtalk/url-health-check-action@v4
+        uses: jtalk/url-health-check-action@b716ccb6645355dd9fcce8002ce460e5474f7f00 # v4
         with:
-          # Check the following URLs one by one sequentially
           url: ${{ steps.webapps-deploy.outputs.webapp-url }}${{ inputs.healthcheck_path }}
-          # Follow redirects, or just report success on 3xx status codes
-          follow-redirect: true # Optional, defaults to "false"
-          # Fail this action after this many failed attempts
+          follow-redirect: true
           max-attempts: 3
-          # Delay between retries
-          retry-delay: 30s # Optional, only applicable to max-attempts > 1
-          # Retry all errors, including 404. This option might trigger curl upgrade.
-          retry-all: true # Optional, defaults to "false"
+          retry-delay: 30s
+          retry-all: true
 
       - name: Swap slots
         if: ${{ matrix.apps.slot-name }}
         run: |
           az webapp deployment slot swap -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
           az webapp stop -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}
+
+      - name: Stop Slot on Failure
+        if: ${{ failure() && steps.login.outcome == 'success' && matrix.apps.slot-name }}
+        run: az webapp stop -s ${{ matrix.apps.slot-name }} -n ${{ matrix.apps.app-name }} -g ${{ vars.AZURE_WEBAPP_RESOURCE_GROUP }}

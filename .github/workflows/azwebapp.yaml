@@ -1,3 +1,6 @@
+# DEPRECATED: Use azwebapp-oidc.yaml instead.
+# This workflow uses credential-based auth (AZURE_CREDENTIALS secret).
+# The OIDC variant is the recommended approach for Azure authentication.
 name: "Azure Web App Deployment"
 
 on:
