@@ -23,6 +23,11 @@ on:
         type: string
         required: false
         default: "/up"
+      healthcheck_delay:
+        description: "Deprecated: healthcheck delay in seconds."
+        type: string
+        required: false
+        default: 30s
     secrets:
       AZURE_CLIENT_ID:
         required: true
