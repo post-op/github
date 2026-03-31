@@ -111,7 +111,7 @@ jobs:
           # Known limitation: if another deployment is triggered between webapps-deploy
           # and this sleep, [0].id may refer to that deployment instead. Accepted risk
           # given single-concurrency (max-parallel: 1) and internal deployment pipelines.
-          sleep 10
+          sleep 90
 
           DEPLOYMENT_ID=$(az webapp log deployment list "${SLOT_ARGS[@]}" --query "[0].id" -o tsv)
           if [ -z "$DEPLOYMENT_ID" ]; then
