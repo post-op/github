@@ -45,11 +45,18 @@ jobs:
     outputs:
       deploy_cfg_apps: ${{ steps.config.outputs.json }}
     steps:
+      # Builds the deploy matrix as {"apps": <DEPLOY_CFG_APPS>}.
       - name: Load Config
         id: config
-        uses: nickofthyme/object-remap@27fddfcb88c02a87ae52e0ddcca703961464f2fc # v3
-        with:
-          apps: ${{ vars.DEPLOY_CFG_APPS }}
+        shell: bash
+        env:
+          APPS: ${{ vars.DEPLOY_CFG_APPS }}
+        run: |
+          if ! JSON=$(jq -cn --argjson apps "$APPS" '{apps: $apps}' 2>/dev/null); then
+            echo "::error::DEPLOY_CFG_APPS is unset or not valid JSON for this environment"
+            exit 1
+          fi
+          echo "json=$JSON" >> "$GITHUB_OUTPUT"
 
   deploy:
     needs: [preflight]
@@ -71,7 +78,7 @@ jobs:
     steps:
       - name: Login via Azure CLI
         id: login
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -83,7 +90,7 @@ jobs:
 
       - name: Deploy Web App
         id: webapps-deploy
-        uses: azure/webapps-deploy@84a80cfe7e9889f35148ed88c307e6e93bf02578 # v3
+        uses: azure/webapps-deploy@02a81bead70021f5284939794bcec79c271ab383 # v3.0.8
         with:
           app-name: ${{ matrix.apps.app-name }}
           images: ${{ inputs.images }}
@@ -150,7 +157,7 @@ jobs:
       # HTTP healthcheck after deployment is confirmed running
       # https://github.com/Azure/webapps-deploy/issues/341#issuecomment-1562578388
       - id: healthcheck
-        uses: jtalk/url-health-check-action@b716ccb6645355dd9fcce8002ce460e5474f7f00 # v4
+        uses: jtalk/url-health-check-action@e7d5ebdc9027fbf494d2d034f3e8fc78f8b7a2b9 # v5
         with:
           url: ${{ steps.webapps-deploy.outputs.webapp-url }}${{ inputs.healthcheck_path }}
           follow-redirect: true
