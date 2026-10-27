@@ -43,6 +43,8 @@ on:
     secrets:
       token:
         required: true
+      build-secrets:
+        required: false
 
 jobs:
   build:
@@ -102,3 +104,4 @@ jobs:
             ${{ inputs.build-args }}
           cache-from: ${{ inputs.cache-from }}
           cache-to: ${{ inputs.cache-to }}
+          secrets: ${{ secrets.build-secrets }}
